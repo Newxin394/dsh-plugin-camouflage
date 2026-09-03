@@ -1,0 +1,41 @@
+{
+  "name": "dsh-plugin-camouflage",
+  "version": "1.1.0",
+  "description": "伪装头 —— DeepSeek Harness 客户端身份伪装插件：为上游 LLM 请求自动伪装 Client User-Agent（如 Cline/3.0.0），解决 API 中转站客户端白名单限制。开关与配置在「设置 → 插件」里。",
+  "type": "module",
+  "main": "index.js",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "camouflage",
+    "user-agent"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  }
+}

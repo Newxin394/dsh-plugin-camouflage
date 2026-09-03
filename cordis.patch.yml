@@ -1,0 +1,9 @@
+# dsh-plugin-camouflage bundle patch
+- insert:
+    - id: client-camouflage
+      name: 'dsh-plugin-camouflage'
+      config:
+        enabled: true
+        userAgent: 'Cline/3.0.0'
+        targetHosts:
+          - 'api.example.com'
