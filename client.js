@@ -472,7 +472,7 @@ window.__ModuleLoader__.load({
     }
 
     /** 浏览器半边需要的服务。 */
-    const inject = ['slots', 'locale']
+    const inject = ['slots', 'locale', 'settingsScope']
 
     /**
      * 挂载插件配置卡片。
@@ -482,19 +482,23 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'camouflage: dictionaries')
       const t = ctx.locale.bind(NS)
-      // settingsScope 走 ctx.inject 而不是顶层 inject：宿主没有这个服务时回调
-      // 不执行，插件的请求头钩子照常工作，只是设置页少一张卡。
-      ctx.inject(['settingsScope'], (scoped) => {
-        const card = new CamouflageCardController(scoped.settingsScope.bind({ namespace: NS }))
-        scoped.effect(() => () => { card.dispose() }, 'camouflage: card form')
-        // slots.inject 等的是插槽声明本身：宿主的插件配置页声明 settings.plugin.item
-        // 之后才注册，声明塌陷时自动撤下，重新声明时再来一次。
-        scoped.slots.inject('settings.plugin.item', () => scoped.slots.register({
+
+      // settingsScope 就绪时初始化卡片控制器
+      const settingsScope = ctx.settingsScope
+      if (!settingsScope) return
+
+      const card = new CamouflageCardController(settingsScope.bind({ namespace: NS }))
+      ctx.effect(() => () => { card.dispose() }, 'camouflage: card form')
+
+      // slots.inject 必须使用生成器函数 (function* + yield) 注册到 settings.plugin.item
+      ctx.slots.inject('settings.plugin.item', function* () {
+        yield ctx.slots.register({
           name: 'settings.plugin.item',
           key: NS,
+          order: 70,
           locale: NS,
           inject: () => ({ t, ...card.inject() }),
-        }, CamouflageCard))
+        }, CamouflageCard)
       })
     }
 
