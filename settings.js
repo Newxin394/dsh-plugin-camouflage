@@ -28,7 +28,7 @@ export const CAMOUFLAGE_NS = 'client-camouflage'
 export const CamouflageSettings = z.object({
   enabled: z.boolean().default(true),
   userAgent: z.string().default('Cline/3.0.0'),
-  targetHosts: z.array(z.string()).default(['api.example.com']),
+  targetHosts: z.array(z.string()).default(['*']),
 })
 
 /**

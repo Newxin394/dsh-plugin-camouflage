@@ -6,4 +6,4 @@
         enabled: true
         userAgent: 'Cline/3.0.0'
         targetHosts:
-          - 'api.example.com'
+          - '*'
