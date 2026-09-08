@@ -1,5 +1,6 @@
 import http from 'node:http'
 import https from 'node:https'
+import { installCamouflageSettings } from './settings.js'
 
 export const name = 'client-camouflage'
 
@@ -97,13 +98,11 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  // 动态 import：settings.js 是唯一依赖外部包（schemastery）的地方，而伪装本身
-  // 零依赖。静态 import 解析失败会是模块求值期的 SyntaxError，cordis 直接把整个
-  // entry 判为加载失败——设置面板的代价不该是连伪装一起失效。
-  void import('./settings.js').then(
-    ({ installCamouflageSettings }) => { installCamouflageSettings(ctx, entry, adopt) },
-    (reason) => { logger?.warn?.('[伪装头] 设置面板未挂载，仍按 composition 配置运行：%s', reason?.message ?? reason) },
-  )
+  try {
+    installCamouflageSettings(ctx, entry, adopt)
+  } catch (err) {
+    logger?.warn?.('[伪装头] 设置面板注册异常：%s', err?.message ?? err)
+  }
 
   const originalFetch = globalThis.fetch
   if (originalFetch && !globalThis.__dsh_camouflage_fetch_hooked) {
