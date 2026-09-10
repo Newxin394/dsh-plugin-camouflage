@@ -23,46 +23,123 @@ export const name = 'client-camouflage'
 const LIVE = '__dsh_camouflage_config'
 
 /**
- * 判断一个 URL 是否该被伪装。
- * @param urlStr - 待判断的完整 URL 字符串；空串一律不改写。
- * @returns 命中 targetHosts 且开关打开时为 true。
+ * 规格化主机名：剔除协议头、路径、端口及首尾空白，统一转小写。
+ * @param {string} entry
+ * @returns {string}
  */
-function shouldCamouflage(urlStr) {
+export function normalizeHost(entry) {
+  if (!entry || typeof entry !== 'string') return ''
+  let host = entry.trim().toLowerCase()
+  if (host === '*') return '*'
+  host = host.replace(/^https?:\/\//, '')
+  host = host.replace(/\/.*$/, '')
+  host = host.replace(/:\d+$/, '')
+  return host
+}
+
+/**
+ * 从不同类型的目标（URL 字符串、URL 对象、Request、ClientRequest 配置等）中提取标准主机名。
+ * @param {any} target
+ * @returns {string}
+ */
+export function extractHostname(target) {
+  if (!target) return ''
+  if (typeof target === 'string') {
+    try {
+      const u = target.includes('://') ? new URL(target) : new URL('http://' + target)
+      return u.hostname.toLowerCase()
+    } catch {
+      return normalizeHost(target)
+    }
+  }
+  if (target instanceof URL) {
+    return target.hostname.toLowerCase()
+  }
+  if (typeof target === 'object' && target !== null) {
+    if (typeof target.url === 'string') return extractHostname(target.url)
+    const raw = target.hostname || target.host || ''
+    return normalizeHost(raw)
+  }
+  return ''
+}
+
+/**
+ * 判断请求目标是否命中伪装配置。
+ * @param {any} target
+ * @returns {boolean}
+ */
+export function shouldCamouflage(target) {
   const cfg = globalThis[LIVE]
   if (!cfg || cfg.enabled !== true) return false
-  if (!urlStr) return false
-  if (cfg.targetHosts.includes('*')) return true
-  for (const host of cfg.targetHosts) {
-    if (urlStr.includes(host)) return true
+  const targetHost = extractHostname(target)
+  if (!targetHost) return false
+  if (Array.isArray(cfg.targetHosts) && cfg.targetHosts.includes('*')) return true
+  if (!Array.isArray(cfg.targetHosts)) return false
+
+  for (const configured of cfg.targetHosts) {
+    const norm = normalizeHost(configured)
+    if (norm === '*' || norm === targetHost || targetHost.endsWith('.' + norm)) {
+      return true
+    }
   }
   return false
 }
 
 /** 读当前生效的 User-Agent。 */
-function activeUserAgent() {
+export function activeUserAgent() {
   return globalThis[LIVE]?.userAgent ?? 'Cline/3.0.0'
 }
 
 /**
- * 覆盖 fetch init 里的 User-Agent，三种 headers 形态都要处理：Headers 实例、
- * [name, value] 数组、普通对象。原有的同名键先删再写，避免大小写不同的两份并存。
+ * 统一对各种形态的请求头注入伪装：
+ * 1. 设置规范的 User-Agent
+ * 2. 剥离暴露 Node.js / OpenAI SDK 指纹的 x-stainless-* 头
+ *
+ * @param {Headers|Array|Object} headers
+ * @param {string} ua
+ * @returns {Headers|Array|Object}
  */
-function overwriteFetchUserAgent(init, ua) {
-  if (typeof Headers !== 'undefined' && init.headers instanceof Headers) {
-    init.headers.set('User-Agent', ua)
-    return
+export function applyCamouflageHeaders(headers, ua) {
+  if (!headers) {
+    return { 'User-Agent': ua }
   }
-  if (Array.isArray(init.headers)) {
-    const kept = init.headers.filter((pair) => String(pair[0]).toLowerCase() !== 'user-agent')
+
+  // 1. WHATWG Headers 实例
+  if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+    const toDelete = []
+    for (const [k] of headers.entries()) {
+      const lower = k.toLowerCase()
+      if (lower.startsWith('x-stainless-') || lower === 'user-agent') {
+        toDelete.push(k)
+      }
+    }
+    for (const k of toDelete) headers.delete(k)
+    headers.set('User-Agent', ua)
+    return headers
+  }
+
+  // 2. [key, value] 二维数组
+  if (Array.isArray(headers)) {
+    const kept = headers.filter(([k]) => {
+      const lower = String(k).toLowerCase()
+      return lower !== 'user-agent' && !lower.startsWith('x-stainless-')
+    })
     kept.push(['User-Agent', ua])
-    init.headers = kept
-    return
+    return kept
   }
-  for (const key of Object.keys(init.headers)) {
-    if (key.toLowerCase() === 'user-agent') delete init.headers[key]
+
+  // 3. 普通字面量对象
+  const result = typeof headers === 'object' ? headers : {}
+  for (const key of Object.keys(result)) {
+    const lower = key.toLowerCase()
+    if (lower === 'user-agent' || lower.startsWith('x-stainless-')) {
+      delete result[key]
+    }
   }
-  init.headers['User-Agent'] = ua
+  result['User-Agent'] = ua
+  return result
 }
+
 
 /**
  * 挂载插件。
@@ -109,15 +186,26 @@ export function apply(ctx, config = {}) {
     globalThis.__dsh_camouflage_fetch_hooked = true
     globalThis.fetch = async function (input, init) {
       try {
-        let urlStr = ''
-        if (typeof input === 'string') urlStr = input
-        else if (input instanceof URL) urlStr = input.href
-        else if (input && typeof input.url === 'string') urlStr = input.url
-
-        if (shouldCamouflage(urlStr)) {
-          if (!init) init = {}
-          if (!init.headers) init.headers = {}
-          overwriteFetchUserAgent(init, activeUserAgent())
+        if (shouldCamouflage(input)) {
+          const ua = activeUserAgent()
+          if (input instanceof Request) {
+            // 保留 Request 实例原有的鉴权头与其它必要头部，并与 init.headers 合并
+            const headers = new Headers(input.headers)
+            if (init && init.headers) {
+              if (init.headers instanceof Headers) {
+                for (const [k, v] of init.headers.entries()) headers.set(k, v)
+              } else if (Array.isArray(init.headers)) {
+                for (const [k, v] of init.headers) headers.set(k, v)
+              } else if (typeof init.headers === 'object') {
+                for (const [k, v] of Object.entries(init.headers)) headers.set(k, v)
+              }
+            }
+            applyCamouflageHeaders(headers, ua)
+            init = { ...init, headers }
+          } else {
+            if (!init) init = {}
+            init.headers = applyCamouflageHeaders(init.headers || {}, ua)
+          }
         }
       } catch (_headerRewriteFailure) {
         // 改不动 header 就按原样发出去：伪装是可选增益，不该让请求本身失败。
@@ -127,39 +215,65 @@ export function apply(ctx, config = {}) {
   }
 
   /** 给 node:http / node:https 的 request 装同一套改写。 */
-  function hookClient(mod) {
+  function hookClient(mod, defaultProto = 'https:') {
     if (!mod || !mod.request || mod.__dsh_camouflage_hooked) return
     mod.__dsh_camouflage_hooked = true
     const orig = mod.request
+
     mod.request = function (...args) {
+      let isHit = false
       try {
-        let urlStr = ''
         let opts = null
+        let target = null
 
         if (typeof args[0] === 'string' || args[0] instanceof URL) {
-          urlStr = String(args[0])
-          opts = args[1]
+          target = args[0]
+          if (typeof args[1] === 'object' && args[1] !== null) {
+            opts = args[1]
+          }
         } else if (typeof args[0] === 'object' && args[0] !== null) {
           opts = args[0]
-          urlStr = (opts.protocol || 'http:') + '//' + (opts.hostname || opts.host || '') + (opts.path || '')
+          target = opts
         }
 
-        if (shouldCamouflage(urlStr) && opts) {
-          opts.headers = opts.headers || {}
-          for (const key of Object.keys(opts.headers)) {
-            if (key.toLowerCase() === 'user-agent') delete opts.headers[key]
+        isHit = shouldCamouflage(target)
+        if (isHit) {
+          const ua = activeUserAgent()
+          if (opts) {
+            opts.headers = applyCamouflageHeaders(opts.headers || {}, ua)
           }
-          opts.headers['User-Agent'] = activeUserAgent()
         }
       } catch (_headerRewriteFailure) {
         // 同上：改写失败不阻断请求。
       }
-      return orig.apply(this, args)
+
+      const req = orig.apply(this, args)
+
+      // 拦截底层 ClientRequest.setHeader，防止 SDK 后续注入 x-stainless-* 或覆写 User-Agent
+      if (isHit && req && typeof req.setHeader === 'function') {
+        try {
+          const ua = activeUserAgent()
+          const origSetHeader = req.setHeader
+          req.setHeader = function (name, value) {
+            const lower = String(name).toLowerCase()
+            if (lower.startsWith('x-stainless-')) {
+              return this
+            }
+            if (lower === 'user-agent') {
+              return origSetHeader.call(this, 'User-Agent', activeUserAgent())
+            }
+            return origSetHeader.call(this, name, value)
+          }
+          req.setHeader('User-Agent', ua)
+        } catch {}
+      }
+
+      return req
     }
   }
 
-  hookClient(http)
-  hookClient(https)
+  hookClient(http, 'http:')
+  hookClient(https, 'https:')
 
   logger?.info?.(
     `[伪装头] 已就绪：上游请求 User-Agent 伪装为 "${entry.userAgent}"（目标 ${entry.targetHosts.join(', ')}，开关 ${entry.enabled ? '开' : '关'}）`,
