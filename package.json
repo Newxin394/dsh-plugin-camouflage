@@ -1,9 +1,23 @@
 {
   "name": "dsh-plugin-camouflage",
-  "version": "1.1.4",
+  "version": "1.2.0",
   "description": "AI自用 —— DeepSeek Harness (DSH) 客户端身份伪装插件：为上游 LLM 请求自动伪装 Client User-Agent（如 Cline/3.0.0）。仅供个人学习与自用测试。",
   "type": "module",
   "main": "index.js",
+  "scripts": {
+    "test": "node --test test/",
+    "check": "node --check index.js && node --check settings.js && node --check client.js && node --test test/"
+  },
+  "files": [
+    "index.js",
+    "settings.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "keywords": [
     "dsh",
     "dsh-plugin",

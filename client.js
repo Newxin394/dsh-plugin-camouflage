@@ -84,8 +84,8 @@ window.__ModuleLoader__.load({
       document.head.appendChild(style)
     }
 
-    /** 宿主没提供 targetHosts 时表单退回的值，与 index.js 的默认一致。 */
-    const DEFAULT_HOSTS = ['api.example.com']
+    /** 宿主没提供 targetHosts 时表单退回的值，与 index.js 的 DEFAULT_TARGET_HOSTS 一致。 */
+    const DEFAULT_HOSTS = ['*']
 
     /** 主机名列表的显示形式：每行一个，比逗号更好读也更好改。 */
     function hostsToText(hosts) {
@@ -112,6 +112,7 @@ window.__ModuleLoader__.load({
       const source = value !== null && typeof value === 'object' ? value : {}
       return {
         enabled: source.enabled !== false,
+        stripStainless: source.stripStainless !== false,
         userAgent: typeof source.userAgent === 'string' ? source.userAgent : 'Cline/3.0.0',
         hostsText: hostsToText(Array.isArray(source.targetHosts) ? source.targetHosts : DEFAULT_HOSTS),
       }
@@ -158,6 +159,7 @@ window.__ModuleLoader__.load({
           saving: this.saving,
           failed: this.failed,
           dirty: shown.enabled !== committed.enabled
+            || shown.stripStainless !== committed.stripStainless
             || shown.userAgent !== committed.userAgent
             || !sameHosts(hosts, textToHosts(committed.hostsText)),
           invalid: uaInvalid || hostsInvalid,
@@ -172,6 +174,10 @@ window.__ModuleLoader__.load({
             overridden: Object.prototype.hasOwnProperty.call(user, 'targetHosts'),
             invalid: hostsInvalid,
           },
+          stripStainless: {
+            checked: shown.stripStainless,
+            overridden: Object.prototype.hasOwnProperty.call(user, 'stripStainless'),
+          },
         }
       }
 
@@ -183,12 +189,15 @@ window.__ModuleLoader__.load({
         return {
           hooks: { camouflageCard: this.store },
           toggle: () => { this.stage({ enabled: !this.shown().enabled }) },
+          toggleStripStainless: () => { this.stage({ stripStainless: !this.shown().stripStainless }) },
           edit: (field, text) => {
             this.stage(field === 'userAgent' ? { userAgent: text } : { hostsText: text })
           },
           resetField: (field) => {
             const base = formOf(this.scope.getSnapshot().base)
-            this.stage(field === 'userAgent' ? { userAgent: base.userAgent } : { hostsText: base.hostsText })
+            if (field === 'userAgent') this.stage({ userAgent: base.userAgent })
+            else if (field === 'stripStainless') this.stage({ stripStainless: base.stripStainless })
+            else this.stage({ hostsText: base.hostsText })
           },
           save: () => { void this.save() },
           discard: () => {
@@ -226,6 +235,7 @@ window.__ModuleLoader__.load({
         const base = formOf(this.scope.getSnapshot().base)
         const intent = {
           enabled: shown.enabled,
+          stripStainless: shown.stripStainless,
           userAgent: shown.userAgent.trim(),
           targetHosts: textToHosts(shown.hostsText),
         }
@@ -239,6 +249,9 @@ window.__ModuleLoader__.load({
           sameHosts(intent.targetHosts, textToHosts(base.hostsText))
             ? { op: 'unset', path: ['targetHosts'] }
             : { op: 'set', path: ['targetHosts'], value: intent.targetHosts },
+          intent.stripStainless === base.stripStainless
+            ? { op: 'unset', path: ['stripStainless'] }
+            : { op: 'set', path: ['stripStainless'], value: intent.stripStainless },
         ]
 
         this.saving = true
@@ -253,6 +266,7 @@ window.__ModuleLoader__.load({
         // 拥有 schema 表达不了的约束，落库值才是唯一权威。
         const settled = formOf(this.scope.getSnapshot().value)
         const landed = settled.enabled === intent.enabled
+          && settled.stripStainless === intent.stripStainless
           && settled.userAgent === intent.userAgent
           && sameHosts(textToHosts(settled.hostsText), intent.targetHosts)
         if (landed) this.draft = null
@@ -274,15 +288,26 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'dshcam_field' },
         h('div', { className: 'dshcam_toggleRow' },
           h('span', { className: 'dshcam_toggleLabel' }, props.label),
-          h('button', {
-            type: 'button',
-            role: 'switch',
-            'aria-checked': props.checked,
-            'aria-label': props.label,
-            className: props.checked ? 'dshcam_switch dshcam_switchOn' : 'dshcam_switch',
-            disabled: props.disabled,
-            onClick: props.onToggle,
-          }, h('span', { className: 'dshcam_thumb' })),
+          h('span', { className: 'dshcam_badges' },
+            props.overridden === true ? h('span', { className: 'dshcam_badge' }, props.overriddenLabel) : null,
+            props.onReset === undefined
+              ? null
+              : h('button', {
+                type: 'button',
+                className: 'dshcam_reset',
+                disabled: props.disabled || props.overridden !== true,
+                onClick: props.onReset,
+              }, props.resetLabel),
+            h('button', {
+              type: 'button',
+              role: 'switch',
+              'aria-checked': props.checked,
+              'aria-label': props.label,
+              className: props.checked ? 'dshcam_switch dshcam_switchOn' : 'dshcam_switch',
+              disabled: props.disabled,
+              onClick: props.onToggle,
+            }, h('span', { className: 'dshcam_thumb' })),
+          ),
         ),
         h('p', { className: 'dshcam_hint' }, props.hint),
       )
@@ -406,6 +431,14 @@ window.__ModuleLoader__.load({
             onEdit: (text) => { props.edit('targetHosts', text) },
             onReset: () => { props.resetField('targetHosts') },
           }),
+          h(ToggleField, {
+            ...fieldChrome,
+            label: t('stripStainlessLabel'),
+            hint: t('stripStainlessHint'),
+            ...state.stripStainless,
+            onToggle: () => { props.toggleStripStainless() },
+            onReset: () => { props.resetField('stripStainless') },
+          }),
           h('div', { className: 'dshcam_footer' },
             state.failed ? h('p', { className: 'dshcam_failed', role: 'status' }, t('saveFailed')) : null,
             h('button', {
@@ -434,8 +467,10 @@ window.__ModuleLoader__.load({
       userAgentHint: '中转站白名单认哪个客户端就填哪个，例如 Cline/3.0.0。',
       userAgentInvalid: '不能为空。',
       targetHostsLabel: '生效的目标主机',
-      targetHostsHint: '每行一个主机名；只有 URL 命中其中之一才改写。填 * 表示所有请求。',
+      targetHostsHint: '每行一个主机名或 URL；请求的主机名等于它、或是它的子域才改写。填 * 表示所有请求。',
       targetHostsInvalid: '至少要填一个主机名。',
+      stripStainlessLabel: '剥离 SDK 指纹头',
+      stripStainlessHint: '删掉 x-stainless-* 这类暴露 OpenAI SDK 身份的请求头。若中转站认的正是官方 SDK 的指纹，关掉它。',
       overridden: '已覆盖',
       reset: '重置',
       unsaved: '未保存',
@@ -457,8 +492,10 @@ window.__ModuleLoader__.load({
       userAgentHint: 'Whichever client the gateway allowlists, for example Cline/3.0.0.',
       userAgentInvalid: 'Cannot be empty.',
       targetHostsLabel: 'Target hosts',
-      targetHostsHint: 'One host per line; only a matching URL is rewritten. Use * for every request.',
+      targetHostsHint: 'One host or URL per line; rewritten only when the request host equals it or is its subdomain. Use * for every request.',
       targetHostsInvalid: 'At least one host is required.',
+      stripStainlessLabel: 'Strip SDK fingerprint headers',
+      stripStainlessHint: 'Removes x-stainless-* headers that reveal the OpenAI SDK identity. Turn it off if the gateway expects that official SDK fingerprint.',
       overridden: 'Overridden',
       reset: 'Reset',
       unsaved: 'Unsaved',

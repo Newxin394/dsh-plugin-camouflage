@@ -7,3 +7,7 @@
         userAgent: 'Cline/3.0.0'
         targetHosts:
           - '*'
+        # 剥离 x-stainless-* 指纹头；中转站认官方 SDK 指纹时改成 false。
+        stripStainless: true
+        # 排查时打开，每次改写写一行日志。
+        logRewrites: false

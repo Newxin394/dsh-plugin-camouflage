@@ -1,0 +1,19 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # 测试零依赖，不装 node_modules 也能跑：schemastery 只在宿主里运行时解析。
+      - run: node --check index.js
+      - run: node --check settings.js
+      - run: node --check client.js
+      - run: node --test test/
