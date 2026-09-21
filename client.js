@@ -355,8 +355,12 @@ window.__ModuleLoader__.load({
      */
     function CamouflageCard(props) {
       const { t } = props
+      // 插件页列表要一句话简介：view summary 时只回描述字符串，宿主负责画标题行。
+      if (props && props.view === 'summary') return t('description')
       const state = props.useCamouflageCard((snapshot) => snapshot)
-      const [open, setOpen] = useState(false)
+      // 详情页（view page）宿主自带标题与面包屑，卡片固定展开不再可折叠。
+      const pageMode = !!(props && props.view === 'page')
+      const [open, setOpen] = useState(pageMode)
       const saveStarted = useRef(false)
 
       // 保存成功后自动收起，和宿主 PluginCard 的行为一致：失败或仍有未保存
@@ -527,12 +531,24 @@ window.__ModuleLoader__.load({
       const card = new CamouflageCardController(settingsScope.bind({ namespace: NS }))
       ctx.effect(() => () => { card.dispose() }, 'camouflage: card form')
 
-      // slots.inject 必须使用生成器函数 (function* + yield) 注册到 settings.plugin.item
+      // 双槽兼容：旧桌面设置页看 settings.plugin.item（按 key 派发），
+      // 新桌面/Web 插件页看 plugins.item（按 id 进 Official 组，要 label）。
+      // slots.inject 必须使用生成器函数 (function* + yield)，slot 未声明时会排队等待。
       ctx.slots.inject('settings.plugin.item', function* () {
         yield ctx.slots.register({
           name: 'settings.plugin.item',
           key: NS,
           order: 70,
+          locale: NS,
+          inject: () => ({ t, ...card.inject() }),
+        }, CamouflageCard)
+      })
+      ctx.slots.inject('plugins.item', function* () {
+        yield ctx.slots.register({
+          name: 'plugins.item',
+          id: 'dsh-plugin-camouflage',
+          order: 70,
+          label: () => t('title'),
           locale: NS,
           inject: () => ({ t, ...card.inject() }),
         }, CamouflageCard)
