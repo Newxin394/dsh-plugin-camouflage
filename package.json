@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-camouflage",
-  "version": "1.2.0",
-  "description": "AI自用 —— DeepSeek Harness (DSH) 客户端身份伪装插件：为上游 LLM 请求自动伪装 Client User-Agent（如 Cline/3.0.0）。仅供个人学习与自用测试。",
+  "version": "1.5.0",
+  "description": "AI自用 —— DeepSeek Harness (DSH) 客户端身份伪装与自定义模型思考能力插件：出网伪装 Client User-Agent、额外 HTTP 请求头，并为自定义提供方提供模型思考能力（Reasoning Efforts / 思考等级切换器）与多模态扩展支持。仅供个人学习与自用测试。",
   "type": "module",
   "main": "index.js",
   "scripts": {
@@ -43,10 +43,14 @@
     },
     "client": {
       "platform": "web",
+      "immediately": true,
       "inject": [
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-settings",
-        "@deepseek-ai/dsh-client-ui-settings-plugins"
+        "@deepseek-ai/dsh-client-ui-settings-plugins",
+        "@deepseek-ai/dsh-client-ui-plugin-manager",
+        "@deepseek-ai/dsh-client-ui-primitives",
+        "@deepseek-ai/dsh-client-runtime"
       ]
     }
   },

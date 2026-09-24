@@ -9,6 +9,7 @@ import {
   extractHostname,
   shouldCamouflage,
   applyCamouflageHeaders,
+  normalizeCustomHeaders,
   normalizeEntry,
   rulesOf,
   installFetchHook,
@@ -136,6 +137,42 @@ test('applyCamouflageHeaders 在没有入参时从零造一份', () => {
   assert.deepEqual(applyCamouflageHeaders(undefined, 'Cline/3.0.0'), { 'User-Agent': 'Cline/3.0.0' })
 })
 
+test('applyCamouflageHeaders 注入自定义头并让同名原值让位', () => {
+  const options = { customHeaders: { 'X-Client-Name': 'my-client', 'X-Trace-Id': 'abc' } }
+  const next = applyCamouflageHeaders(
+    { Authorization: 'Bearer t', 'x-client-name': 'old', 'x-stainless-lang': 'js' },
+    'Cline/3.0.0',
+    options,
+  )
+  assert.deepEqual(next, {
+    Authorization: 'Bearer t',
+    'X-Client-Name': 'my-client',
+    'X-Trace-Id': 'abc',
+    'User-Agent': 'Cline/3.0.0',
+  })
+
+  const list = applyCamouflageHeaders(
+    [['X-TRACE-ID', 'old'], ['accept', '*/*']],
+    'Cline/3.0.0',
+    { customHeaders: { 'X-Trace-Id': 'xyz' } },
+  )
+  assert.deepEqual(list, [['accept', '*/*'], ['User-Agent', 'Cline/3.0.0'], ['X-Trace-Id', 'xyz']])
+})
+
+test('normalizeCustomHeaders 清洗非法头名、换行值、重复头与 user-agent', () => {
+  assert.deepEqual(normalizeCustomHeaders({
+    'X-Client': 'ok',
+    'x-client': 'late',           // 大小写不敏感去重，后出现的覆盖，头名取后出现原形
+    'Bad Header': 'x',            // 含空格的非法 token，丢弃
+    'X-Newline': 'a\nb',          // 含换行的值，丢弃
+    'X-Num': 42,                  // 非 string 值，丢弃
+    'User-Agent': 'clash/1.0',    // UA 走 userAgent 字段，丢弃
+  }), { 'x-client': 'late' })
+
+  assert.deepEqual(normalizeCustomHeaders(undefined), {})
+  assert.deepEqual(normalizeCustomHeaders(['a', 'b']), {})
+})
+
 // ---------------------------------------------------------------- fetch 钩子
 
 test('fetch 钩子命中时改写 UA、留住鉴权头、剥掉指纹头', async () => {
@@ -164,6 +201,32 @@ test('fetch 钩子命中时改写 UA、留住鉴权头、剥掉指纹头', async
   assert.equal(headers.get('content-type'), 'application/json')
   assert.equal(headers.get('x-stainless-lang'), null)
   assert.equal(captured[0].method, 'POST')
+})
+
+test('fetch 钩子把自定义头一起钉进命中的请求', async () => {
+  setConfig({ targetHosts: ['ps.air-outer.com'], customHeaders: { 'X-Client-Name': 'my-client' } })
+  const savedFetch = globalThis.fetch
+  const captured = []
+  globalThis.fetch = async (input, init) => {
+    captured.push(init)
+    return new Response('ok')
+  }
+  const dispose = installFetchHook(console)
+  try {
+    await globalThis.fetch('https://ps.air-outer.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer secret', 'x-client-name': 'old' },
+    })
+  } finally {
+    dispose()
+    globalThis.fetch = savedFetch
+  }
+
+  assert.equal(captured.length, 1)
+  const headers = new Headers(captured[0].headers)
+  assert.equal(headers.get('x-client-name'), 'my-client')
+  assert.equal(headers.get('user-agent'), 'Test/1.0')
+  assert.equal(headers.get('authorization'), 'Bearer secret')
 })
 
 test('fetch 钩子不碰未命中的主机，且不传 init 也能工作', async () => {
@@ -317,30 +380,44 @@ test('http 与 https 的 request 都在卸载时还原', () => {
 test('normalizeEntry 补齐缺省字段并保留显式关闭', () => {
   assert.deepEqual(normalizeEntry({}), {
     enabled: true,
+    enableThinking: true,
     userAgent: DEFAULT_USER_AGENT,
     targetHosts: ['*'],
+    customHeaders: {},
     stripStainless: true,
     logRewrites: false,
   })
   assert.deepEqual(normalizeEntry({ enabled: false, userAgent: 'X/1', targetHosts: ['a.com'], stripStainless: false, logRewrites: true }), {
     enabled: false,
+    enableThinking: true,
     userAgent: 'X/1',
     targetHosts: ['a.com'],
+    customHeaders: {},
     stripStainless: false,
     logRewrites: true,
   })
   assert.deepEqual(normalizeEntry({ userAgent: '', targetHosts: [] }), {
     enabled: true,
+    enableThinking: true,
     userAgent: DEFAULT_USER_AGENT,
     targetHosts: ['*'],
+    customHeaders: {},
     stripStainless: true,
     logRewrites: false,
   })
 })
 
 test('normalizeEntry 缺字段时回落到上一份配置', () => {
-  const entry = normalizeEntry({ userAgent: 'Cline/1.0.0', targetHosts: ['ps.air-outer.com'] })
+  const entry = normalizeEntry({ userAgent: 'Cline/1.0.0', targetHosts: ['ps.air-outer.com'], customHeaders: { 'X-Client': 'a' } })
   const next = normalizeEntry({}, entry)
   assert.equal(next.userAgent, 'Cline/1.0.0')
   assert.deepEqual(next.targetHosts, ['ps.air-outer.com'])
+  assert.deepEqual(next.customHeaders, { 'X-Client': 'a' })
+})
+
+test('normalizeEntry 显式空自定义头是清空而不是回落', () => {
+  const prev = normalizeEntry({ customHeaders: { 'X-Client': 'a' } })
+  const next = normalizeEntry({ customHeaders: {} }, prev)
+  assert.deepEqual(next.customHeaders, {})
+  assert.deepEqual(prev.customHeaders, { 'X-Client': 'a' })
 })

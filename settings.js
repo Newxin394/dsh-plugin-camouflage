@@ -84,8 +84,10 @@ export function installCamouflageSettings(ctx, entry, adopt) {
     }
     const CamouflageSettings = z.object({
       enabled: z.boolean().default(true),
+      enableThinking: z.boolean().default(true),
       userAgent: z.string().default('Cline/3.0.0'),
       targetHosts: z.array(z.string()).default(['*']),
+      customHeaders: typeof z.dict === 'function' ? z.dict(z.string()).default({}) : z.object({}).default({}),
       stripStainless: z.boolean().default(true),
       logRewrites: z.boolean().default(false),
     })

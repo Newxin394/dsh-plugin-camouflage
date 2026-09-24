@@ -7,8 +7,60 @@ export const name = 'client-camouflage'
 /** composition 与 settings 都没给身份时用的默认值。 */
 export const DEFAULT_USER_AGENT = 'Cline/3.0.0'
 
+/** 常用客户端身份预设，供前端与配置快捷选用。 */
+export const USER_AGENT_PRESETS = [
+  'Cline/3.0.0',
+  'claude-cli/2.1.161 (external, cli)',
+  'claude-cli/2.1.161',
+  'claude-code/1.0.0',
+  'claude-code/0.1.0',
+  'Kilo-Code/1.0',
+  'Roo-Code/3.8.0',
+]
+
 /** 默认生效范围：所有出站请求。与 settings schema 和卡片的退回值保持一致。 */
 export const DEFAULT_TARGET_HOSTS = ['*']
+
+/** RFC 7230 / 9110 标准 HTTP Token 正则。 */
+export const HTTP_TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
+
+/**
+ * 校验请求头名称是否合法。
+ * @param {any} name
+ * @returns {boolean}
+ */
+export function isValidHeaderName(name) {
+  return typeof name === 'string' && name.length > 0 && HTTP_TOKEN.test(name)
+}
+
+/**
+ * 校验请求头值是否安全（防 CRLF 注入）。
+ * @param {any} value
+ * @returns {boolean}
+ */
+export function isValidHeaderValue(value) {
+  return typeof value === 'string' && !/\r|\n/.test(value)
+}
+
+/**
+ * 规格化自定义请求头字典。剔除不合法的头名和换行值，同名字段大小写去重保留最后一项。
+ * @param {Record<string, string>|undefined} headers
+ * @returns {Record<string, string>}
+ */
+export function normalizeCustomHeaders(headers) {
+  if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return {}
+  const merged = new Map()
+  for (const [rawKey, rawValue] of Object.entries(headers)) {
+    if (typeof rawKey !== 'string' || typeof rawValue !== 'string') continue
+    const key = rawKey.trim()
+    if (!isValidHeaderName(key)) continue
+    const lower = key.toLowerCase()
+    if (lower === 'user-agent') continue // User-Agent 有专有配置项
+    if (!isValidHeaderValue(rawValue)) continue
+    merged.set(lower, [key, rawValue])
+  }
+  return Object.fromEntries(merged.values())
+}
 
 /** OpenAI 官方 SDK 的指纹头前缀，会暴露调用方其实是哪个客户端。 */
 const STAINLESS_PREFIX = 'x-stainless-'
@@ -140,6 +192,11 @@ export function activeUserAgent() {
   return globalThis[LIVE]?.userAgent ?? DEFAULT_USER_AGENT
 }
 
+/** 读当前生效的额外自定义请求头。 */
+export function activeCustomHeaders() {
+  return globalThis[LIVE]?.customHeaders ?? {}
+}
+
 /** 当前是否剥离 x-stainless-* 指纹头。 */
 export function activeStripStainless() {
   return globalThis[LIVE]?.stripStainless !== false
@@ -151,25 +208,32 @@ export function activeLogRewrites() {
 }
 
 /**
- * 统一对各种形态的请求头注入伪装，并返回改写后的**新**副本。
+ * 统一对各种形态的请求头注入伪装与自定义头，并返回改写后的**新**副本。
  *
- * 三条约束：
- * 1. 不就地修改入参。调用方可能把同一个字面量对象复用给每次请求，就地删键会把
- *    污染带到下一次请求上；Headers 实例同理，可能是调用方打算继续复用的。
- * 2. 同一头名的不同大小写只留一份，避免发出去两个 User-Agent。
- * 3. 默认剥离 x-stainless-*；关掉开关时原样保留，因为某些中转站认的恰恰是
- *    OpenAI 官方 SDK 的那套指纹头。
+ * 约束与安全保证：
+ * 1. 不就地修改入参，始终返回干净的新副本。
+ * 2. 同一头名的不同大小写只留一份，避免发出冲突或重复的头。
+ * 3. 默认剥离 x-stainless-*；关掉开关时原样保留。
+ * 4. 深度合并 options.customHeaders，优先使用用户配置的自定义头覆盖同名头。
  *
  * @param {Headers|Array|Object|undefined} headers
  * @param {string} ua
- * @param {{stripStainless?: boolean}} [options]
+ * @param {{stripStainless?: boolean, customHeaders?: Record<string, string>}} [options]
  * @returns {Headers|Array|Object}
  */
 export function applyCamouflageHeaders(headers, ua, options = {}) {
   const strip = options.stripStainless !== false
+  const custom = normalizeCustomHeaders(options.customHeaders)
+  const customLowerMap = new Map()
+  for (const [k, v] of Object.entries(custom)) {
+    customLowerMap.set(k.toLowerCase(), [k, v])
+  }
+
   const isBlocked = (value) => {
     const lower = String(value).toLowerCase()
-    return lower === 'user-agent' || (strip && lower.startsWith(STAINLESS_PREFIX))
+    return lower === 'user-agent'
+      || (strip && lower.startsWith(STAINLESS_PREFIX))
+      || customLowerMap.has(lower)
   }
 
   if (typeof Headers !== 'undefined' && headers instanceof Headers) {
@@ -178,12 +242,18 @@ export function applyCamouflageHeaders(headers, ua, options = {}) {
       if (!isBlocked(key)) next.append(key, value)
     }
     next.set('User-Agent', ua)
+    for (const [, [k, v]] of customLowerMap.entries()) {
+      next.set(k, v)
+    }
     return next
   }
 
   if (Array.isArray(headers)) {
     const next = headers.filter((pair) => !isBlocked(Array.isArray(pair) ? pair[0] : ''))
     next.push(['User-Agent', ua])
+    for (const [, [k, v]] of customLowerMap.entries()) {
+      next.push([k, v])
+    }
     return next
   }
 
@@ -193,6 +263,9 @@ export function applyCamouflageHeaders(headers, ua, options = {}) {
     if (!isBlocked(key)) next[key] = value
   }
   next['User-Agent'] = ua
+  for (const [, [k, v]] of customLowerMap.entries()) {
+    next[k] = v
+  }
   return next
 }
 
@@ -215,11 +288,13 @@ export function urlOf(input) {
 }
 
 /** 配置里那个 logRewrites 打开时，逐条记一行改写日志。 */
-function traceRewrite(logger, target, ua) {
+function traceRewrite(logger, target, ua, customHeaders = {}) {
   if (!activeLogRewrites()) return
   const url = urlOf(target)
   const host = url ? url.host : extractHostname(target)
-  logger?.info?.('[伪装头] %s → User-Agent: %s', host || '未知主机', ua)
+  const extraKeys = Object.keys(customHeaders)
+  const extraNote = extraKeys.length > 0 ? ` (+${extraKeys.length} 个自定义头: ${extraKeys.join(', ')})` : ''
+  logger?.info?.('[伪装头] %s → User-Agent: %s%s', host || '未知主机', ua, extraNote)
 }
 
 /**
@@ -245,6 +320,7 @@ export function installFetchHook(logger) {
       if (shouldCamouflage(input)) {
         const ua = activeUserAgent()
         const stripStainless = activeStripStainless()
+        const customHeaders = activeCustomHeaders()
         let nextInit = init
         if (typeof Request !== 'undefined' && input instanceof Request) {
           // Request 自带的鉴权头必须留下，init.headers 若有则覆盖同名项。
@@ -254,11 +330,11 @@ export function installFetchHook(logger) {
               headers.set(key, value)
             }
           }
-          nextInit = { ...init, headers: applyCamouflageHeaders(headers, ua, { stripStainless }) }
+          nextInit = { ...init, headers: applyCamouflageHeaders(headers, ua, { stripStainless, customHeaders }) }
         } else {
-          nextInit = { ...init, headers: applyCamouflageHeaders(init?.headers, ua, { stripStainless }) }
+          nextInit = { ...init, headers: applyCamouflageHeaders(init?.headers, ua, { stripStainless, customHeaders }) }
         }
-        traceRewrite(logger, input, ua)
+        traceRewrite(logger, input, ua, customHeaders)
         return original.call(this, input, nextInit)
       }
     } catch {
@@ -312,10 +388,14 @@ function installOneClient(mod, logger) {
 
       if (shouldCamouflage(urlArg ?? options)) {
         hit = true
-        options.headers = applyCamouflageHeaders(options.headers, activeUserAgent(), {
-          stripStainless: activeStripStainless(),
+        const ua = activeUserAgent()
+        const stripStainless = activeStripStainless()
+        const customHeaders = activeCustomHeaders()
+        options.headers = applyCamouflageHeaders(options.headers, ua, {
+          stripStainless,
+          customHeaders,
         })
-        traceRewrite(logger, urlArg ?? options, activeUserAgent())
+        traceRewrite(logger, urlArg ?? options, ua, customHeaders)
       }
     } catch {
       // 同上：改写失败不阻断请求。
@@ -325,7 +405,7 @@ function installOneClient(mod, logger) {
     const req = original.apply(this, nextArgs)
 
     // SDK 拿到 ClientRequest 之后还会自己 setHeader，把 x-stainless-* 和
-    // 它自己的 User-Agent 再压回来。这一层拦截就是为了堵住后手。
+    // 它自己的 User-Agent 或默认头再压回来。这一层拦截就是为了堵住后手。
     if (hit && req && typeof req.setHeader === 'function') {
       try {
         const originalSetHeader = req.setHeader
@@ -337,9 +417,19 @@ function installOneClient(mod, logger) {
           if (lower === 'user-agent') {
             return originalSetHeader.call(this, 'User-Agent', activeUserAgent())
           }
+          const custom = activeCustomHeaders()
+          for (const [k, v] of Object.entries(custom)) {
+            if (k.toLowerCase() === lower) {
+              return originalSetHeader.call(this, k, v)
+            }
+          }
           return originalSetHeader.call(this, name, value)
         }
         req.setHeader('User-Agent', activeUserAgent())
+        const custom = activeCustomHeaders()
+        for (const [k, v] of Object.entries(custom)) {
+          req.setHeader(k, v)
+        }
       } catch {
         // 拦截装不上也不影响已经写进 options 的那一份。
       }
@@ -371,7 +461,7 @@ export function installClientHooks(logger) {
  * 把一份来路不明的配置折成完整、可用的形状。
  * @param {object} config - composition 或 settings 解出的值。
  * @param {object} [fallback] - 缺字段时回落到的上一份配置。
- * @returns {{enabled: boolean, userAgent: string, targetHosts: string[], stripStainless: boolean, logRewrites: boolean}}
+ * @returns {{enabled: boolean, userAgent: string, targetHosts: string[], customHeaders: Record<string, string>, stripStainless: boolean, logRewrites: boolean}}
  */
 export function normalizeEntry(config = {}, fallback = {}) {
   const source = config && typeof config === 'object' ? config : {}
@@ -381,10 +471,15 @@ export function normalizeEntry(config = {}, fallback = {}) {
   const hosts = Array.isArray(source.targetHosts) && source.targetHosts.length > 0
     ? [...source.targetHosts]
     : (fallback.targetHosts ?? DEFAULT_TARGET_HOSTS)
+  const custom = source.customHeaders !== undefined
+    ? normalizeCustomHeaders(source.customHeaders)
+    : (fallback.customHeaders !== undefined ? normalizeCustomHeaders(fallback.customHeaders) : {})
   return {
     enabled: source.enabled !== false,
+    enableThinking: source.enableThinking !== false,
     userAgent: ua,
     targetHosts: hosts,
+    customHeaders: custom,
     stripStainless: source.stripStainless !== false,
     logRewrites: source.logRewrites === true,
   }
@@ -431,11 +526,15 @@ export function apply(ctx, config = {}) {
     disposeClients?.()
   }, 'camouflage: outbound hooks')
 
+  const customKeys = Object.keys(entry.customHeaders)
+  const customSummary = customKeys.length > 0 ? `，自定义头 ${customKeys.length} 个 [${customKeys.join(', ')}]` : ''
   logger?.info?.(
-    '[伪装头] 已就绪：上游请求 User-Agent 伪装为 "%s"（目标 %s，开关 %s，指纹头剥离 %s）',
+    '[伪装头] 已就绪：上游请求 User-Agent 伪装为 "%s"%s（目标 %s，开关 %s，指纹头剥离 %s）',
     entry.userAgent,
+    customSummary,
     entry.targetHosts.join(', '),
     entry.enabled ? '开' : '关',
     entry.stripStainless ? '开' : '关',
   )
 }
+

@@ -7,6 +7,8 @@
         userAgent: 'Cline/3.0.0'
         targetHosts:
           - '*'
+        # 额外自定义请求头（例如 anthropic-version、X-Title 等），不需要时不写或留空字典。
+        customHeaders: {}
         # 剥离 x-stainless-* 指纹头；中转站认官方 SDK 指纹时改成 false。
         stripStainless: true
         # 排查时打开，每次改写写一行日志。
