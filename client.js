@@ -1557,24 +1557,30 @@ window.__ModuleLoader__.load({
 
     // ---------------------------------------------------------------- 浏览器插件挂载入口
 
+    function resolveScope(ctx, namespace) {
+      // RACEFIX-20260927: 属性访问未注入服务会触发 cordis ReflectService throw（时序竞态），
+      // 一律走安全的 ctx.get()：服务未就绪时降级为 unavailable 桩，插件照常激活。
+      const svc = typeof ctx.get === 'function' ? (ctx.get('configForms') || ctx.get('settingsScope')) : null;
+      if (svc && typeof svc.get === 'function') return svc.get(namespace);
+      if (svc && typeof svc.bind === 'function') return svc.bind({ namespace });
+      return { getSnapshot: () => ({ status: 'unavailable', value: {} }), subscribe: () => () => {}, set: async () => {} };
+    }
+
     // 只保留标准可靠的服务依赖，彻底避免因缺失 connection/remote 导致被 Cordis 阻塞不执行
-    const inject = ['slots', 'locale', 'settingsScope']
+    const inject = ['slots', 'locale']
 
     function apply(ctx) {
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'camouflage: dictionaries')
       const t = ctx.locale.bind(NS)
 
-      const settingsScope = ctx.settingsScope
-      if (!settingsScope) return
-
       // 1. 初始化伪装头自身配置控制器 (client-camouflage)
-      const card = new CamouflageCardController(settingsScope.bind({ namespace: NS }))
+      const card = new CamouflageCardController(resolveScope(ctx, NS))
       ctx.effect(() => () => { card.dispose() }, 'camouflage: card form')
 
       // 2. 初始化官方模型思考控制器 (llm-pi-ai)
       let modelController = null
       try {
-        const llmScope = settingsScope.bind({ namespace: 'llm-pi-ai' })
+        const llmScope = resolveScope(ctx, 'llm-pi-ai')
         modelController = createModelController(llmScope, t)
         ctx.effect(() => () => { modelController.dispose() }, 'camouflage: model controller')
       } catch {

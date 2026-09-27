@@ -91,10 +91,14 @@ export function installCamouflageSettings(ctx, entry, adopt) {
       stripStainless: z.boolean().default(true),
       logRewrites: z.boolean().default(false),
     })
-    const scope = scopedCtx.settings.register(CAMOUFLAGE_NS, CamouflageSettings, { base: entry })
-    const push = () => { adopt(scope.get()) }
-    scopedCtx.effect(() => () => { adopt(entry) })
-    push()
-    scope.watch(push)
+    if (typeof scopedCtx.settings?.register === 'function') {
+      const scope = scopedCtx.settings.register(CAMOUFLAGE_NS, CamouflageSettings, { base: entry })
+      const push = () => { adopt(scope.get()) }
+      scopedCtx.effect(() => () => { adopt(entry) })
+      push()
+      scope.watch(push)
+    } else {
+      adopt(entry)
+    }
   })
 }
