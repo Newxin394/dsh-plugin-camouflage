@@ -1271,7 +1271,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    // ---------------------------------------------------------------- 通过 settingsScope 操控 llm-pi-ai
+    // ---------------------------------------------------------------- 通过 configForms 操控 llm-pi-ai
 
     function createModelController(llmScope, t) {
       let toast
@@ -1635,14 +1635,7 @@ window.__ModuleLoader__.load({
           locale: NS,
           inject: cardProps,
         }, CamouflageCard)
-        yield ctx.slots.register({
-          name: 'plugins.item',
-          key: NS,
-          order: 70,
-          label: () => t('title'),
-          locale: NS,
-          inject: cardProps,
-        }, CamouflageCard)
+        // 0.1.7 list slot 强制要求 options.id，双槽兼容的 key-only 重复注册已移除（会抛 requires options.id）
       })
 
       // 4. 旧桌面设置页
